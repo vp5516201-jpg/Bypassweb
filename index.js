@@ -12,29 +12,27 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === CONFIGURATION ===
-// Ye wo sites hain jahan bot ko rukna nahi hai (Fake Destinations)
-const INTERMEDIATE_DOMAINS = [
-    'wblaxmibhandar.com', 
-    'tech', 
-    'loan', 
-    'insurance', 
-    'lyrics', 
-    'recipe',
-    'pmyojana'
-];
+// === CONFIG: FAKE DOMAINS ===
+// In domains par bot ko rukna mana hai
+const FAKE_DOMAINS = ['wblaxmibhandar', 'tech', 'loan', '1ksfy', 'insurance', 'pmyojana'];
 
-async function useExternalApi(url) {
+// === PLAN B: API CALL (Jab Bot Fail Ho) ===
+async function forceExternalApi(url) {
+    console.log("⚠️ Bot Stuck. Forcing External API...");
     try {
-        console.log("⚠️ Bot Stuck. Calling External API...");
         const response = await axios.get(`https://api.bypass.vip/bypass?url=${encodeURIComponent(url)}`);
         if (response.data && (response.data.result || response.data.destination)) {
-            return response.data.result || response.data.destination;
+            const final = response.data.result || response.data.destination;
+            console.log("✅ API Recovered Link: " + final);
+            return final;
         }
-    } catch (e) {}
+    } catch (e) {
+        console.log("❌ API Failed.");
+    }
     return null;
 }
 
+// === FAKE IDENTITIES ===
 const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Mobile Safari/537.36'
@@ -42,9 +40,10 @@ const userAgents = [
 
 async function bypassLink(url) {
     let browser = null;
-    
+    let finalDestination = url;
+
     try {
-        console.log(`🚀 Starting Multi-Step Hunt for: ${url}`);
+        console.log(`🚀 Hunting: ${url}`);
 
         browser = await puppeteerExtra.launch({
             args: [
@@ -66,7 +65,7 @@ async function bypassLink(url) {
         const page = await browser.newPage();
         await page.setUserAgent(userAgents[Math.floor(Math.random() * userAgents.length)]);
 
-        // Speed Boost: Images Block
+        // Block Heavy Assets (Speed Up)
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'media', 'font', 'stylesheet'].includes(req.resourceType())) {
@@ -77,100 +76,75 @@ async function bypassLink(url) {
         });
 
         page.setDefaultNavigationTimeout(60000);
-        
-        // Loop shuru (Maximum 3 hops allow karenge)
-        let currentUrl = url;
         await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-        for(let step = 1; step <= 3; step++) {
-            console.log(`🔄 Step ${step}: Currently at ${page.url()}`);
+        // === 3 STEP ATTACK ===
+        // Hum loop use karenge taaki redirect pakad sakein
+        for (let i = 0; i < 3; i++) {
+            console.log(`🔄 Check ${i+1}: ${page.url()}`);
+            
+            // 1. Scroll Bottom (Button aksar niche hota hai)
+            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+            
+            // 2. Wait logic (Agar fake blog hai to 15s wait, nahi to 5s)
+            const currentUrl = page.url();
+            const isFake = FAKE_DOMAINS.some(d => currentUrl.includes(d));
+            await new Promise(r => setTimeout(r, isFake ? 15000 : 5000));
 
-            // 1. Scroll (Pura niche tak, kyunki button aksar footer me hota hai)
-            await page.evaluate(async () => {
-                await new Promise((resolve) => {
-                    let totalHeight = 0;
-                    const distance = 100;
-                    const timer = setInterval(() => {
-                        const scrollHeight = document.body.scrollHeight;
-                        window.scrollBy(0, distance);
-                        totalHeight += distance;
-                        if (totalHeight >= scrollHeight) {
-                            clearInterval(timer);
-                            resolve();
-                        }
-                    }, 100);
-                });
-            });
-
-            // 2. Wait (Blog page par timer hota hai 15s ka)
-            // Agar pehla step hai to kam wait, agar blog hai to zyada wait
-            const waitTime = (page.url().includes('wblaxmibhandar')) ? 15000 : 8000;
-            await new Promise(r => setTimeout(r, waitTime));
-
-            // 3. Click Logic (Aggressive)
+            // 3. Brutal Clicker (Har button daba do)
             try {
                 const clicked = await page.evaluate(() => {
-                    // Ye text dhundo button par
-                    const keywords = ['get link', 'click to continue', 'click here', 'verify', 'scroll down', 'go to link', 'link download', 'open link'];
-                    const elements = document.querySelectorAll('a, button, div.btn, span, input[type="submit"]');
+                    const keywords = ['get link', 'continue', 'verify', 'open', 'go to link', 'click here', 'scroll down', 'link download'];
+                    const buttons = document.querySelectorAll('a, button, div.btn, span.btn, input[type="submit"]');
                     
-                    for (let el of elements) {
-                        const text = el.innerText ? el.innerText.toLowerCase() : "";
-                        // Agar keyword mile aur element visible ho
-                        if (keywords.some(k => text.includes(k)) && el.offsetParent !== null) {
-                            el.click();
+                    for (let btn of buttons) {
+                        const txt = btn.innerText ? btn.innerText.toLowerCase() : "";
+                        if (keywords.some(k => txt.includes(k)) && btn.offsetParent !== null) {
+                            btn.click();
                             return true;
                         }
                     }
                     return false;
                 });
-
-                if(clicked) {
-                    console.log("✅ Button Clicked! Waiting for next page...");
-                    await new Promise(r => setTimeout(r, 8000)); // Click ke baad wait
+                
+                if (clicked) {
+                    console.log("✅ Clicked! Waiting for redirect...");
+                    await new Promise(r => setTimeout(r, 8000));
                 }
             } catch(e) {}
 
-            const newUrl = page.url();
-
-            // CHECK: Kya hume rukna chahiye?
-            // Agar URL change nahi hua, ya abhi bhi 'Fake Blog' par hai
-            const isFakeBlog = INTERMEDIATE_DOMAINS.some(d => newUrl.includes(d));
+            // Update URL
+            finalDestination = page.url();
             
-            if (!isFakeBlog && newUrl !== currentUrl && !newUrl.includes('1ksfy')) {
-                console.log("🎉 Destination Reached!");
-                currentUrl = newUrl;
-                break; // Loop todo, manzil mil gayi
-            }
-            
-            // Agar URL same hai, matlab atak gaya
-            if (newUrl === currentUrl && step > 1) {
-                console.log("⚠️ Stuck on same page.");
+            // AGAR SAHI LINK MIL GAYA (Drive, Mega, Mediafire) TO RUK JAO
+            if (finalDestination.includes('drive.google') || finalDestination.includes('mega.nz') || finalDestination.includes('mediafire') || finalDestination.includes('youtube')) {
                 break;
             }
-            
-            currentUrl = newUrl;
-        }
-
-        console.log(`🏁 Final Link: ${currentUrl}`);
-        
-        // Final Check: Agar abhi bhi Blog link hai, to Plan B use karo
-        if (currentUrl.includes('wblaxmibhandar') || currentUrl.includes('1ksfy')) {
-            throw new Error("Still on landing page");
         }
 
         await browser.close();
-        return { originalUrl: currentUrl };
+
+        // === FINAL JUDGMENT (Sabse Zaroori) ===
+        // Agar abhi bhi URL me '1ksfy' ya 'blog' hai, matlab FAIL hua hai.
+        // Toh hum API use karenge.
+        if (FAKE_DOMAINS.some(d => finalDestination.includes(d))) {
+            throw new Error("Stuck on Landing Page");
+        }
+
+        console.log(`🏁 Success: ${finalDestination}`);
+        return { originalUrl: finalDestination };
 
     } catch (error) {
-        console.log(`❌ Bot Failed: ${error.message}. Trying External API...`);
+        console.log(`⚠️ Bot Failed. Using FORCE API.`);
         if(browser) await browser.close();
 
-        // Plan B: API
-        const apiResult = await useExternalApi(url);
-        if (apiResult) return { originalUrl: apiResult };
+        // PLAN B: Force API
+        const apiLink = await forceExternalApi(url);
+        if (apiLink) {
+            return { originalUrl: apiLink };
+        }
 
-        return { error: "Failed to bypass." };
+        return { error: "Failed to bypass. Try again." };
     }
 }
 
