@@ -12,41 +12,64 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === PLAN B: EXTERNAL API BYPASSER (Jab Bot Fail Ho Jaye) ===
-// Ye function tab chalega jab Key Generate karni ho
-async function useExternalApi(url) {
-    try {
-        console.log("⚠️ Bot stuck. Switching to External API for Key...");
-        // Hum ek free public API use kar rahe hain jo keys tod sakti hai
-        // Note: Ye APIs badalti rehti hain, abhi Ethos/Bypass.vip use kar rahe hain
-        const apiUrl = `https://api.bypass.vip/bypass?url=${encodeURIComponent(url)}`;
-        
-        const response = await axios.get(apiUrl);
-        
-        if (response.data && response.data.result) {
-            console.log("✅ API Success: " + response.data.result);
-            return response.data.result;
-        } else if (response.data && response.data.destination) {
-             console.log("✅ API Success: " + response.data.destination);
-             return response.data.destination;
-        }
-        return null;
-    } catch (error) {
-        console.log("❌ External API also failed.");
-        return null;
+// === 1. DOMAIN CONFIGURATION (Tumhari List Ke Hisab Se) ===
+// Humne Links ko category mein baant diya hai
+const siteConfigs = {
+    // HARD LINKS (Ads + Timer + Button)
+    'shrinkearn': { wait: 15000, btn: ['verify', 'continue', 'get link'], adBlock: true },
+    'linkpays':   { wait: 15000, btn: ['get link', 'continue'], adBlock: true },
+    'zipzy':      { wait: 12000, btn: ['get link', 'go'], adBlock: true },
+    'surl.li':    { wait: 5000, btn: ['go'], adBlock: false },
+    
+    // MEDIUM LINKS (Thoda wait)
+    'linkly':     { wait: 5000, btn: null, adBlock: false },
+    'rebrandly':  { wait: 3000, btn: null, adBlock: false },
+    'sniply':     { wait: 5000, btn: ['continue'], adBlock: true },
+
+    // DEFAULT (Bitly, TinyURL, etc. ke liye auto-detect)
+    'default':    { wait: 4000, btn: ['get link', 'continue', 'skip ad', 'go'], adBlock: false }
+};
+
+// Domain Pehchanne ka Function
+function getConfig(url) {
+    for (const key in siteConfigs) {
+        if (url.toLowerCase().includes(key)) return siteConfigs[key];
     }
+    return siteConfigs['default'];
 }
 
-// === PLAN A: HUMARA BOT (View Count Ke Liye) ===
+// === 2. GOOGLE ADS BLOCKER LIST ===
+// Ye domains load hi nahi honge taaki bot confuse na ho
+const blockedDomains = [
+    'googlesyndication.com', 'adservice.google.com', 'doubleclick.net',
+    'google-analytics.com', 'facebook.net', 'adnxs.com', 'popads.net',
+    'push', 'notification', 'tracker'
+];
+
+// === 3. PLAN B: EXTERNAL API ===
+async function useExternalApi(url) {
+    try {
+        console.log("⚠️ Switching to External API...");
+        const response = await axios.get(`https://api.bypass.vip/bypass?url=${encodeURIComponent(url)}`);
+        if (response.data && (response.data.result || response.data.destination)) {
+            return response.data.result || response.data.destination;
+        }
+    } catch (e) { console.log("Plan B Failed."); }
+    return null;
+}
+
+// === 4. PLAN A: MAIN LOGIC ===
 const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Mobile Safari/537.36'
 ];
 
 async function bypassLink(url) {
     let browser = null;
+    const config = getConfig(url);
+    
     try {
-        console.log(`🚀 Plan A: Starting Hunt for ${url}`);
+        console.log(`🚀 Processing: ${url}`);
         
         browser = await puppeteerExtra.launch({
             args: [
@@ -56,7 +79,8 @@ async function bypassLink(url) {
                 '--disable-setuid-sandbox',
                 '--no-sandbox',
                 '--no-zygote',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-popup-blocking' // Popups handle karne ke liye
             ],
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
@@ -65,25 +89,28 @@ async function bypassLink(url) {
         });
 
         const page = await browser.newPage();
-        const randomAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
-        await page.setUserAgent(randomAgent);
+        await page.setUserAgent(userAgents[Math.floor(Math.random() * userAgents.length)]);
 
-        // Heavy files block karo
+        // === AD BLOCKER SYSTEM ===
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'media', 'font', 'stylesheet'].includes(req.resourceType())) {
-                req.abort();
-            } else {
-                req.continue();
+            const reqUrl = req.url();
+            const resourceType = req.resourceType();
+
+            // Agar Heavy Link hai (Linkpays etc) to Images aur Ads block karo
+            if (config.adBlock || blockedDomains.some(d => reqUrl.includes(d))) {
+                if (['image', 'media', 'font', 'stylesheet', 'other'].includes(resourceType) || blockedDomains.some(d => reqUrl.includes(d))) {
+                    req.abort();
+                    return;
+                }
             }
+            req.continue();
         });
 
-        page.setDefaultNavigationTimeout(30000); // 30 sec limit for Plan A
-        
-        // Try Loading
+        page.setDefaultNavigationTimeout(60000);
         await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-        // Scroll (View Count Logic)
+        // Scroll (View Count ke liye)
         await page.evaluate(async () => {
             await new Promise((resolve) => {
                 let totalHeight = 0;
@@ -92,7 +119,7 @@ async function bypassLink(url) {
                     const scrollHeight = document.body.scrollHeight;
                     window.scrollBy(0, distance);
                     totalHeight += distance;
-                    if (totalHeight >= scrollHeight || totalHeight > 1000) {
+                    if (totalHeight >= scrollHeight || totalHeight > 2000) {
                         clearInterval(timer);
                         resolve();
                     }
@@ -100,49 +127,58 @@ async function bypassLink(url) {
             });
         });
 
-        // 10 Second Wait for Button/Timer
-        await new Promise(r => setTimeout(r, 10000));
+        // Config ke hisab se Wait karo
+        await new Promise(r => setTimeout(r, config.wait));
 
-        // CLICKER LOGIC (Simple pages ke liye)
-        try {
-            const clicked = await page.evaluate(() => {
-                const keywords = ['get link', 'continue', 'verify', 'go to link'];
-                const elements = document.querySelectorAll('a, button, div.btn');
-                for (let el of elements) {
-                    const text = el.innerText ? el.innerText.toLowerCase() : "";
-                    if (keywords.some(key => text.includes(key))) {
-                        el.click();
-                        return true;
+        // === SMART CLICKER ===
+        // Agar simple redirect nahi hua, to button dabao
+        if (config.btn) {
+            try {
+                const clicked = await page.evaluate((btnList) => {
+                    // Button Keywords dhundo (Verify, Get Link etc)
+                    const elements = document.querySelectorAll('a, button, input[type="submit"], div.btn');
+                    for (let el of elements) {
+                        const text = el.innerText ? el.innerText.toLowerCase() : "";
+                        const val = el.value ? el.value.toLowerCase() : "";
+                        
+                        if (btnList.some(k => text.includes(k) || val.includes(k))) {
+                            // Check visibility
+                            if(el.offsetParent !== null) {
+                                el.click();
+                                return true;
+                            }
+                        }
                     }
+                    return false;
+                }, config.btn);
+
+                if (clicked) {
+                    console.log("✅ Button Clicked! Waiting...");
+                    await new Promise(r => setTimeout(r, 6000));
                 }
-                return false;
-            });
-            if(clicked) await new Promise(r => setTimeout(r, 5000));
-        } catch(e) {}
+            } catch(e) {}
+        }
 
         const finalUrl = page.url();
 
-        // CHECK: Agar URL wahi purana hai (Matlab Key par atak gaya)
-        if (finalUrl.includes(url) || finalUrl.includes('1ksfy') || finalUrl.includes('linkvertise')) {
-            throw new Error("Stuck on Key Page"); // Force Error to trigger Plan B
+        // Check if stuck (URL same hai ya shortener domain par hi hai)
+        if (finalUrl.includes(url) || finalUrl.length < 15) {
+             throw new Error("Stuck on page");
         }
 
-        console.log(`🏁 Plan A Success: ${finalUrl}`);
+        console.log(`🏁 Success: ${finalUrl}`);
         await browser.close();
         return { originalUrl: finalUrl };
 
     } catch (error) {
-        console.log(`⚠️ Plan A Failed (${error.message}). Switching to Plan B...`);
+        console.log(`⚠️ Plan A Failed: ${error.message}`);
         if(browser) await browser.close();
 
-        // CALL EXTERNAL API (Plan B)
+        // Plan B: Try External API
         const apiResult = await useExternalApi(url);
-        
-        if (apiResult) {
-            return { originalUrl: apiResult };
-        } else {
-            return { error: "Failed to bypass. Key system is too strong." };
-        }
+        if (apiResult) return { originalUrl: apiResult };
+
+        return { error: "Failed to bypass." };
     }
 }
 
