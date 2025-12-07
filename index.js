@@ -2,6 +2,7 @@ const express = require('express');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const axios = require('axios');
 const cors = require('cors');
 
 const puppeteerExtra = require('puppeteer-extra');
@@ -11,22 +12,42 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Fake Mobile/PC Identities (Taaki Server na lage)
+// === PLAN B: EXTERNAL API BYPASSER (Jab Bot Fail Ho Jaye) ===
+// Ye function tab chalega jab Key Generate karni ho
+async function useExternalApi(url) {
+    try {
+        console.log("⚠️ Bot stuck. Switching to External API for Key...");
+        // Hum ek free public API use kar rahe hain jo keys tod sakti hai
+        // Note: Ye APIs badalti rehti hain, abhi Ethos/Bypass.vip use kar rahe hain
+        const apiUrl = `https://api.bypass.vip/bypass?url=${encodeURIComponent(url)}`;
+        
+        const response = await axios.get(apiUrl);
+        
+        if (response.data && response.data.result) {
+            console.log("✅ API Success: " + response.data.result);
+            return response.data.result;
+        } else if (response.data && response.data.destination) {
+             console.log("✅ API Success: " + response.data.destination);
+             return response.data.destination;
+        }
+        return null;
+    } catch (error) {
+        console.log("❌ External API also failed.");
+        return null;
+    }
+}
+
+// === PLAN A: HUMARA BOT (View Count Ke Liye) ===
 const userAgents = [
-    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
 ];
 
 async function bypassLink(url) {
     let browser = null;
-    const randomAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
-
     try {
-        console.log(`Processing: ${url}`);
-        console.log(`Identity: ${randomAgent.substring(0, 50)}...`);
-
+        console.log(`🚀 Plan A: Starting Hunt for ${url}`);
+        
         browser = await puppeteerExtra.launch({
             args: [
                 ...chromium.args,
@@ -35,7 +56,7 @@ async function bypassLink(url) {
                 '--disable-setuid-sandbox',
                 '--no-sandbox',
                 '--no-zygote',
-                '--disable-blink-features=AutomationControlled' // Bot detection chupana
+                '--disable-blink-features=AutomationControlled'
             ],
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
@@ -44,26 +65,25 @@ async function bypassLink(url) {
         });
 
         const page = await browser.newPage();
-        
-        // Asli User banne ka natak
+        const randomAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
         await page.setUserAgent(randomAgent);
-        
-        // Images Block karo (Speed badhane ke liye)
+
+        // Heavy files block karo
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'media', 'font'].includes(req.resourceType())) {
+            if (['image', 'media', 'font', 'stylesheet'].includes(req.resourceType())) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
-        page.setDefaultNavigationTimeout(60000); // 60 Sec Timeout
+        page.setDefaultNavigationTimeout(30000); // 30 sec limit for Plan A
         
-        // Link Kholo
+        // Try Loading
         await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-        // Scroll Logic (View Count ke liye zaroori)
+        // Scroll (View Count Logic)
         await page.evaluate(async () => {
             await new Promise((resolve) => {
                 let totalHeight = 0;
@@ -72,7 +92,7 @@ async function bypassLink(url) {
                     const scrollHeight = document.body.scrollHeight;
                     window.scrollBy(0, distance);
                     totalHeight += distance;
-                    if (totalHeight >= scrollHeight || totalHeight > 2000) {
+                    if (totalHeight >= scrollHeight || totalHeight > 1000) {
                         clearInterval(timer);
                         resolve();
                     }
@@ -80,19 +100,49 @@ async function bypassLink(url) {
             });
         });
 
-        // 10 Second Wait (Timer ke liye)
+        // 10 Second Wait for Button/Timer
         await new Promise(r => setTimeout(r, 10000));
 
+        // CLICKER LOGIC (Simple pages ke liye)
+        try {
+            const clicked = await page.evaluate(() => {
+                const keywords = ['get link', 'continue', 'verify', 'go to link'];
+                const elements = document.querySelectorAll('a, button, div.btn');
+                for (let el of elements) {
+                    const text = el.innerText ? el.innerText.toLowerCase() : "";
+                    if (keywords.some(key => text.includes(key))) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
+            if(clicked) await new Promise(r => setTimeout(r, 5000));
+        } catch(e) {}
+
         const finalUrl = page.url();
-        console.log(`Success! Final Link: ${finalUrl}`);
-        
+
+        // CHECK: Agar URL wahi purana hai (Matlab Key par atak gaya)
+        if (finalUrl.includes(url) || finalUrl.includes('1ksfy') || finalUrl.includes('linkvertise')) {
+            throw new Error("Stuck on Key Page"); // Force Error to trigger Plan B
+        }
+
+        console.log(`🏁 Plan A Success: ${finalUrl}`);
         await browser.close();
         return { originalUrl: finalUrl };
 
     } catch (error) {
-        console.error("Error:", error.message);
+        console.log(`⚠️ Plan A Failed (${error.message}). Switching to Plan B...`);
         if(browser) await browser.close();
-        return { error: "Failed to open link. Site might be blocking servers." };
+
+        // CALL EXTERNAL API (Plan B)
+        const apiResult = await useExternalApi(url);
+        
+        if (apiResult) {
+            return { originalUrl: apiResult };
+        } else {
+            return { error: "Failed to bypass. Key system is too strong." };
+        }
     }
 }
 
