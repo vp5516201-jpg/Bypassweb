@@ -5,7 +5,6 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const axios = require('axios');
 const cors = require('cors');
 
-// Stealth Magic (Taaki bot pakda na jaye)
 const puppeteerExtra = require('puppeteer-extra');
 puppeteerExtra.use(StealthPlugin());
 
@@ -13,7 +12,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Proxy List Logic
+// Proxy List
 const PROXY_API = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all';
 let proxyList = [];
 
@@ -21,81 +20,98 @@ async function updateProxies() {
     try {
         const response = await axios.get(PROXY_API);
         proxyList = response.data.split('\r\n').filter(p => p);
-        console.log(`Updated: ${proxyList.length} proxies.`);
+        console.log(`Updated: ${proxyList.length} proxies found.`);
     } catch (e) { console.log("Proxy update failed"); }
 }
 updateProxies();
-setInterval(updateProxies, 600000);
+setInterval(updateProxies, 600000); // 10 min refresh
 
 async function bypassLink(url) {
-    let browser = null;
-    const proxy = proxyList[Math.floor(Math.random() * proxyList.length)];
-    
-    // Agar proxy nahi mili to bina proxy ke try karega (Fail hone se acha hai)
-    const proxyArgs = proxy ? [`--proxy-server=http://${proxy}`] : [];
+    // 🔥 AUTO-RETRY SYSTEM (3 Times Try Karega)
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    try {
-        console.log("Launching Lite Browser...");
+    while (attempts < maxAttempts) {
+        attempts++;
+        let browser = null;
         
-        browser = await puppeteerExtra.launch({
-            args: [
-                ...chromium.args,
-                ...proxyArgs,
-                '--disable-gpu',
-                '--disable-dev-shm-usage',
-                '--disable-setuid-sandbox',
-                '--no-sandbox',
-                '--no-zygote'
-            ],
-            executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
-            defaultViewport: chromium.defaultViewport,
-            ignoreHTTPSErrors: true
-        });
+        // Random Proxy Pick Karo
+        const proxy = proxyList[Math.floor(Math.random() * proxyList.length)];
+        // Agar Proxy list khali hai ya proxy fail ho rahi hai, to Direct try karo (Last attempt)
+        const useProxy = (proxy && attempts < 3); 
+        const proxyArgs = useProxy ? [`--proxy-server=http://${proxy}`] : [];
 
-        const page = await browser.newPage();
-        
-        // Block Heavy Assets (Images/Fonts/CSS) - RAM Bachane ke liye
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
+        console.log(`Attempt ${attempts}/${maxAttempts}: ${useProxy ? 'Using Proxy ' + proxy : 'Trying Direct Connection'}`);
 
-        page.setDefaultNavigationTimeout(60000);
-        await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-        // Scroll Logic (View Count ke liye)
-        await page.evaluate(async () => {
-            await new Promise((resolve) => {
-                let totalHeight = 0;
-                const distance = 100;
-                const timer = setInterval(() => {
-                    const scrollHeight = document.body.scrollHeight;
-                    window.scrollBy(0, distance);
-                    totalHeight += distance;
-                    if (totalHeight >= scrollHeight || totalHeight > 1000) {
-                        clearInterval(timer);
-                        resolve();
-                    }
-                }, 200);
+        try {
+            browser = await puppeteerExtra.launch({
+                args: [
+                    ...chromium.args,
+                    ...proxyArgs,
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox',
+                    '--no-sandbox',
+                    '--no-zygote',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process'
+                ],
+                executablePath: await chromium.executablePath(),
+                headless: chromium.headless,
+                defaultViewport: chromium.defaultViewport,
+                ignoreHTTPSErrors: true
             });
-        });
 
-        await new Promise(r => setTimeout(r, 15000)); // 15 sec wait
+            const page = await browser.newPage();
+            
+            // Block Images/Fonts to save Data & Speed
+            await page.setRequestInterception(true);
+            page.on('request', (req) => {
+                if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+                    req.abort();
+                } else {
+                    req.continue();
+                }
+            });
 
-        const finalUrl = page.url();
-        await browser.close();
-        return { originalUrl: finalUrl };
+            // Timeout badhaya (Traffic jam se bachne ke liye)
+            page.setDefaultNavigationTimeout(90000); 
+            
+            // Link Open Karo
+            await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    } catch (error) {
-        console.error(error);
-        if(browser) await browser.close();
-        return { error: "Failed. Try Again." };
+            // Agar yahan tak pahunche, matlab Success! 🎉
+            // Ab View Count ke liye Scroll Karo
+            await page.evaluate(async () => {
+                await new Promise((resolve) => {
+                    let totalHeight = 0;
+                    const distance = 100;
+                    const timer = setInterval(() => {
+                        const scrollHeight = document.body.scrollHeight;
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+                        if (totalHeight >= scrollHeight || totalHeight > 1500) {
+                            clearInterval(timer);
+                            resolve();
+                        }
+                    }, 200);
+                });
+            });
+
+            await new Promise(r => setTimeout(r, 12000)); // 12 sec wait
+
+            const finalUrl = page.url();
+            await browser.close();
+            return { originalUrl: finalUrl };
+
+        } catch (error) {
+            console.error(`Attempt ${attempts} Failed: ${error.message}`);
+            if (browser) await browser.close();
+            // Loop wapas chalega aur nayi proxy try karega
+        }
     }
+
+    return { error: "All 3 Proxies Failed. Server Busy." };
 }
 
 app.get('/api/bypass', async (req, res) => {
